@@ -149,7 +149,9 @@ fn run_cap_std(root: &Path, files: usize, data: &[u8]) -> std::io::Result<Durati
         file.write_all(data)?;
         file.set_modified(time)?;
     }
+    // Windows will not remove a folder while a handle on it is open.
     drop(folders);
+    drop(base);
     let elapsed = start.elapsed();
     fs::remove_dir_all(root)?;
     Ok(elapsed)
