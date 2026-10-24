@@ -1,0 +1,12 @@
+[package]
+name = "fsbench"
+description = "What each per-file step of an extraction costs on this filesystem"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone: not part of the rars workspace.
+[workspace]
+
+[profile.release]
+opt-level = 3

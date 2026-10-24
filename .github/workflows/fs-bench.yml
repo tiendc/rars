@@ -1,0 +1,43 @@
+# What each per-file step of an extraction costs, per OS. Fork only: lives on
+# the `bench` branch and runs when it is pushed.
+name: FS bench
+
+on:
+  push:
+    branches: [bench]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fsbench:
+    name: FS bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --manifest-path tools/fsbench/Cargo.toml
+      - name: Defender state
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-MpComputerStatus | Select-Object AMServiceEnabled,RealTimeProtectionEnabled,OnAccessProtectionEnabled,AntivirusEnabled | Format-List
+      - name: Run
+        run: tools/fsbench/target/release/fsbench "$RUNNER_TEMP/fsbench" 2400 60000
+      - name: Run with the folder excluded from Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP\fsbench-excluded"
+          tools/fsbench/target/release/fsbench.exe "$env:RUNNER_TEMP\fsbench-excluded" 2400 60000
