@@ -37,6 +37,7 @@ const NONE: Steps = Steps {
 fn patterns() -> Vec<(&'static str, Steps)> {
     vec![
         ("minimal (7-Zip/UnRAR-like)", NONE),
+        ("lstat each component x1 (spike safe-path)", Steps { lstat_rounds: 1, ..NONE }),
         ("+ mkdir per file", Steps { mkdir_each: true, ..NONE }),
         ("+ lstat each component x4", Steps { lstat_rounds: 4, ..NONE }),
         ("+ canonicalize x5", Steps { canonicalize_rounds: 5, ..NONE }),
@@ -121,6 +122,39 @@ fn run(root: &Path, archive: &Path, files: usize, data: &[u8], steps: Steps) -> 
     Ok(elapsed)
 }
 
+/// Files created relative to an open handle on their folder (openat-style,
+/// through cap-std), which neither resolves the path again nor can be sent
+/// through a link: the folder handles are opened once and kept.
+fn run_cap_std(root: &Path, files: usize, data: &[u8]) -> std::io::Result<Duration> {
+    use cap_std::ambient_authority;
+    use cap_std::fs::{Dir, OpenOptions as CapOpen};
+    let _ = fs::remove_dir_all(root);
+    fs::create_dir_all(root)?;
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let start = Instant::now();
+    let base = Dir::open_ambient_dir(root, ambient_authority())?;
+    let mut folders: std::collections::HashMap<PathBuf, Dir> = std::collections::HashMap::new();
+    for i in 0..files {
+        let rel = relative(i);
+        let parent = rel.parent().expect("parent").to_path_buf();
+        if !folders.contains_key(&parent) {
+            base.create_dir_all(&parent)?;
+            folders.insert(parent.clone(), base.open_dir(&parent)?);
+        }
+        let dir = &folders[&parent];
+        let name = rel.file_name().expect("name");
+        let mut file = dir
+            .open_with(name, CapOpen::new().write(true).create_new(true))?
+            .into_std();
+        file.write_all(data)?;
+        file.set_modified(time)?;
+    }
+    drop(folders);
+    let elapsed = start.elapsed();
+    fs::remove_dir_all(root)?;
+    Ok(elapsed)
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dir = PathBuf::from(args.first().map_or("fsbench-work", String::as_str));
@@ -142,6 +176,13 @@ fn main() -> std::io::Result<()> {
         let mbps = (files * bytes) as f64 / best.as_secs_f64() / 1e6;
         println!("| {name} | {per_k:.0} | {mbps:.0} |");
     }
+    let mut best = Duration::MAX;
+    for _ in 0..3 {
+        best = best.min(run_cap_std(&dir.join("out"), files, &data)?);
+    }
+    let per_k = best.as_secs_f64() * 1000.0 * 1000.0 / files as f64;
+    let mbps = (files * bytes) as f64 / best.as_secs_f64() / 1e6;
+    println!("| cap-std, folder handles kept | {per_k:.0} | {mbps:.0} |");
     fs::remove_file(&archive)?;
     Ok(())
 }

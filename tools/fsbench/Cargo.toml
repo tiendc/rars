@@ -8,5 +8,8 @@ publish = false
 # Standalone: not part of the rars workspace.
 [workspace]
 
+[dependencies]
+cap-std = "3"
+
 [profile.release]
 opt-level = 3
