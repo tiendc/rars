@@ -75,9 +75,14 @@ def pack(src: Path, out: Path, rars: str) -> None:
         print(f"{name}: {archive.stat().st_size >> 20} MiB")
 
 
-def run(cmd: list[str]) -> float:
+def run(cmd: list[str]) -> float | None:
+    """Seconds taken, or None if the reader reported an error."""
     start = time.perf_counter()
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace")
+    if result.returncode:
+        first = next((l for l in result.stderr.splitlines() if l.strip()), "")
+        print(f"error ({result.returncode}) from {' '.join(cmd)}: {first}", flush=True)
+        return None
     return time.perf_counter() - start
 
 
@@ -107,7 +112,8 @@ def timing(out: Path, specs: list[str]) -> None:
                 test_cmd, extract_cmd = commands(spec, archive, dest)
                 for what, cmd in (("test", test_cmd), ("extract", extract_cmd)):
                     seconds = run(cmd)
-                    results.setdefault((archive.stem, what, name), []).append(unpacked / seconds / 1e6)
+                    rate = None if seconds is None else unpacked / seconds / 1e6
+                    results.setdefault((archive.stem, what, name), []).append(rate)
                 shutil.rmtree(dest, ignore_errors=True)
     lines = ["| archive | what | " + " | ".join(s.split("=", 1)[0] for s in specs) + " |",
              "|---|---|" + "---|" * len(specs)]
@@ -115,8 +121,8 @@ def timing(out: Path, specs: list[str]) -> None:
         for what in ("test", "extract"):
             cells = []
             for spec in specs:
-                runs = results[(archive, what, spec.split("=", 1)[0])]
-                cells.append(f"{min(runs):.0f}–{max(runs):.0f}")
+                runs = [r for r in results[(archive, what, spec.split("=", 1)[0])] if r is not None]
+                cells.append(f"{min(runs):.0f}–{max(runs):.0f}" if runs else "error")
             lines.append(f"| {archive} | {what} | " + " | ".join(cells) + " |")
     table = "\n".join(lines)
     print(f"MB/s of unpacked data ({unpacked / 1e6:.0f} MB), three rounds in turn:\n\n{table}")

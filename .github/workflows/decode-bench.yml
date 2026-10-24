@@ -50,8 +50,8 @@ jobs:
         run: |
           # Readers to time beside rars, as NAME=KIND:COMMAND separated by ';'.
           case "$RUNNER_OS" in
-            Linux) sudo apt-get install -y -qq unrar >/dev/null && echo "REF=unrar=unrar:unrar" >> "$GITHUB_ENV" || true ;;
-            Windows) echo "REF=7-Zip=7z:C:/Program Files/7-Zip/7z.exe" >> "$GITHUB_ENV" ;;
+            Linux) sudo apt-get install -y -qq unrar >/dev/null && echo "REF=unrar=unrar:unrar" >> "$GITHUB_ENV" && unrar | head -2 || true ;;
+            Windows) echo "REF=7-Zip=7z:C:/Program Files/7-Zip/7z.exe" >> "$GITHUB_ENV"; "/c/Program Files/7-Zip/7z.exe" | head -3 ;;
             # Homebrew's 7-Zip is built without RAR decompression.
             macOS) ;;
           esac
