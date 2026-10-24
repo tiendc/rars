@@ -35,9 +35,12 @@ jobs:
         run: Get-MpComputerStatus | Select-Object AMServiceEnabled,RealTimeProtectionEnabled,OnAccessProtectionEnabled,AntivirusEnabled | Format-List
       - name: Run
         run: tools/fsbench/target/release/fsbench "$RUNNER_TEMP/fsbench" 2400 60000
-      - name: Run with the folder excluded from Defender
+      - name: Run with Defender real-time protection turned on
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP\fsbench-excluded"
-          tools/fsbench/target/release/fsbench.exe "$env:RUNNER_TEMP\fsbench-excluded" 2400 60000
+          # Hosted runners ship with it off; users' machines have it on.
+          Set-MpPreference -DisableRealtimeMonitoring $false
+          Start-Sleep -Seconds 5
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled,OnAccessProtectionEnabled | Format-List
+          tools/fsbench/target/release/fsbench.exe "$env:RUNNER_TEMP\fsbench-defender" 2400 60000
