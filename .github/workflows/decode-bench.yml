@@ -1,0 +1,66 @@
+# Decode speed of upstream master against this branch, on hosted runners.
+# Lives only on the fork's `bench` branch; runs when that branch is pushed.
+name: Decode bench
+
+on:
+  push:
+    branches: [bench-cli]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: new
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: bitplane/rars
+          ref: master
+          path: old
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Build both CLIs
+        run: |
+          (cd old && cargo build --release -p rars-cli --locked)
+          (cd new && cargo build --release -p rars-cli --locked)
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
+          mkdir -p bin && cp old/target/release/rars$ext bin/rars-master$ext && cp new/target/release/rars$ext bin/rars-new$ext
+          bin/rars-new$ext --version
+          echo "EXT=$ext" >> "$GITHUB_ENV"
+          uname -a; nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || true
+      - name: Other readers
+        run: |
+          # Readers to time beside rars, as NAME=KIND:COMMAND separated by ';'.
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get install -y -qq unrar >/dev/null && echo "REF=unrar=unrar:unrar" >> "$GITHUB_ENV" && unrar | head -2 || true ;;
+            Windows) echo "REF=7-Zip=7z:C:/Program Files/7-Zip/7z.exe" >> "$GITHUB_ENV"; "/c/Program Files/7-Zip/7z.exe" | head -3 ;;
+            # Homebrew's 7-Zip is built without RAR decompression.
+            macOS) ;;
+          esac
+      - name: Make the folder and archives
+        run: |
+          python new/scripts/decode-bench.py data work/data
+          python new/scripts/decode-bench.py pack work/data work/archives bin/rars-new$EXT
+      - name: Time
+        run: |
+          IFS=';' read -r -a ref <<< "$REF"
+          python new/scripts/decode-bench.py time work/archives \
+            "master=rars:bin/rars-master$EXT" "this branch=rars:bin/rars-new$EXT" "${ref[@]}"
