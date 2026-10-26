@@ -1,0 +1,92 @@
+# Fork only: RAR5 decoding of archives written by RAR 7.23, upstream master
+# against this branch, on Linux, Windows and macOS.
+name: RAR5 bench
+
+on:
+  push:
+    branches: [bench-r5x]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  archives:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Text for the folder (the Cargo registry's sources)
+        run: cargo fetch --locked
+      - name: RAR for Linux 7.23 (trial version from rarlab.com)
+        run: |
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 20 --connect-timeout 30 \
+            -o /tmp/rar.tar.gz https://www.rarlab.com/rar/rarlinux-x64-723.tar.gz
+          mkdir -p /opt/rar && tar -xzf /tmp/rar.tar.gz -C /opt/rar --strip-components=1
+      - name: Pack
+        run: |
+          python3 scripts/decode-bench.py data work/data
+          mkdir -p work/archives && cd work/data
+          /opt/rar/rar a -r -idq -ma5 -m3 -s ../archives/rar7-solid.rar .
+          /opt/rar/rar a -r -idq -ma5 -m3 ../archives/rar7-default.rar .
+          /opt/rar/rar a -r -idq -ma5 -m5 -s ../archives/rar7-best-solid.rar .
+          python3 -c "import pathlib; print(sum(p.stat().st_size for p in pathlib.Path('.').rglob('*') if p.is_file()))" > ../archives/unpacked.txt
+          ls -l ../archives
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rar7-archives
+          path: work/archives/
+          retention-days: 3
+
+  bench:
+    needs: archives
+    name: Bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: new
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: bitplane/rars
+          ref: master
+          path: old
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build both CLIs
+        run: |
+          (cd old && cargo build --release -p rars-cli --locked)
+          (cd new && cargo build --release -p rars-cli --locked)
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
+          mkdir -p bin && cp old/target/release/rars$ext bin/rars-master$ext && cp new/target/release/rars$ext bin/rars-new$ext
+          echo "EXT=$ext" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: rar7-archives
+          path: work/archives
+      - name: Other readers
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get install -y -qq unrar >/dev/null && echo "REF=unrar=unrar:unrar" >> "$GITHUB_ENV" || true ;;
+            Windows) echo "REF=7-Zip=7z:C:/Program Files/7-Zip/7z.exe" >> "$GITHUB_ENV" ;;
+            macOS) ;;
+          esac
+      - name: Time
+        run: |
+          IFS=';' read -r -a ref <<< "${REF:-}"
+          BENCH_UNPACKED=$(cat work/archives/unpacked.txt) python new/scripts/decode-bench.py time work/archives \
+            "master=rars:bin/rars-master$EXT" "this branch=rars:bin/rars-new$EXT" "${ref[@]}"
