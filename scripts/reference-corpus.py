@@ -294,7 +294,8 @@ def pack(packer, command, case, payload_dir, out_dir):
     target = out_dir / stem
     target.mkdir()
     source = payload_dir / case["payload"]
-    switches = [switch.replace("{comment}", str(payload_dir.parent / "comment.txt"))
+    # Absolute: the packer runs inside the payload's folder.
+    switches = [switch.replace("{comment}", str((payload_dir.parent / "comment.txt").resolve()))
                 for switch in case["switches"]]
     result = subprocess.run(
         command + ["a", "-r", "-idq", "-y"] + switches
