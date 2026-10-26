@@ -141,9 +141,14 @@ EXTENDED_PAYLOADS = {
         "Tài liệu/báo cáo năm 2026.txt": "Nội dung tiếng Việt.\n".encode() * 200,
         "日本語/ファイル名.txt": "日本語のテキスト\n".encode() * 200,
         "Ελληνικά/αρχείο.txt": "Ελληνικό κείμενο\n".encode() * 200,
-        "🎉 party/emoji name 😀.txt": b"emoji\n" * 200,
         "spaces and (brackets) [1]/a b c.txt": b"spaces\n" * 200,
         ("long-" + "x" * 180 + ".txt"): b"a long name\n" * 50,
+    },
+    # Characters outside the BMP, which RAR 4's Unicode names cannot hold
+    # (RAR 6.24 drops them), so RAR 5 only.
+    "names-astral": lambda: {
+        "🎉 party/emoji name 😀.txt": b"emoji\n" * 200,
+        "𝔘𝔫𝔦𝔠𝔬𝔡𝔢/𝕗𝕚𝕝𝕖.txt": b"mathematical letters\n" * 200,
     },
     # True colour and audio, for the RGB and audio filters (-mcc+ -mca+).
     "media": lambda: {
@@ -190,6 +195,7 @@ def extended_combinations(version):
             ]
         else:
             cases += [
+                ("names-astral", "m3", ["-m3"], False, False),
                 ("software", "m3s-htb", ["-m3", "-s", "-htb"], False, False),
                 ("software", "m3-qo", ["-m3", "-qo+"], False, False),
                 ("dupes", "m3-oi", ["-m3", "-oi1"], False, False),
