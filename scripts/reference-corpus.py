@@ -87,6 +87,24 @@ def wav_audio(seconds, rate=22050):
     return header + b"data" + struct.pack("<I", len(frames)) + bytes(frames)
 
 
+def bmp_image(width, height):
+    """A 24-bit true-colour bitmap, which RAR 4 packers can give an RGB filter."""
+    row_size = (width * 3 + 3) & ~3
+    pixels = bytearray()
+    for y in range(height):
+        row = bytearray()
+        for x in range(width):
+            row += bytes(((x * 255) // width, (y * 255) // height, ((x + y) * 7) & 255))
+        pixels += row + bytes(row_size - len(row))
+    header = b"BM" + struct.pack("<IHHI", 54 + len(pixels), 0, 0, 54)
+    header += struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(pixels), 2835, 2835, 0, 0)
+    return header + bytes(pixels)
+
+
+class Link(str):
+    """A payload entry that is a symbolic link to this relative target."""
+
+
 def nfo(title):
     lines = [title, "=" * len(title), ""]
     lines += ["%-12s: %s" % (key, value) for key, value in (
@@ -113,6 +131,78 @@ PAYLOADS = {
         "Setup/empty.dat": b"",
     },
 }
+
+
+# Content for the extended cases (generate --extended): what the switch
+# combinations above leave out but real archives carry.
+EXTENDED_PAYLOADS = {
+    # Names outside ASCII, as packers store them (RAR 4 in its Unicode field).
+    "names": lambda: {
+        "Tài liệu/báo cáo năm 2026.txt": "Nội dung tiếng Việt.\n".encode() * 200,
+        "日本語/ファイル名.txt": "日本語のテキスト\n".encode() * 200,
+        "Ελληνικά/αρχείο.txt": "Ελληνικό κείμενο\n".encode() * 200,
+        "🎉 party/emoji name 😀.txt": b"emoji\n" * 200,
+        "spaces and (brackets) [1]/a b c.txt": b"spaces\n" * 200,
+        ("long-" + "x" * 180 + ".txt"): b"a long name\n" * 50,
+    },
+    # True colour and audio, for the RGB and audio filters (-mcc+ -mca+).
+    "media": lambda: {
+        "image.bmp": bmp_image(384, 256),
+        "theme.wav": wav_audio(3),
+    },
+    # The same bytes three times, for references to identical files (-oi).
+    "dupes": lambda: dict.fromkeys(
+        ("one/copy.bin", "two/copy.bin", "three/copy.bin"), noise(200_003, 0xD0B1E)
+    ) | {"unique.bin": noise(50_021, 0x0D0)},
+    # A symbolic link to a file next to it, stored as a link (-ol).
+    "links": lambda: {
+        "real.txt": b"the link points here\n" * 100,
+        "link-to-real.txt": Link("real.txt"),
+        "dir/inner.txt": b"inside a folder\n" * 100,
+    },
+}
+
+
+def extended_combinations(version):
+    """What `combinations` does not ask for: BLAKE2 hashes, quick open
+    records, references to identical files, links, names outside ASCII,
+    PPMd and the RAR 4 multimedia filters, locked archives with comments,
+    large dictionaries, and recovery volumes."""
+    major = version[0]
+    formats = []
+    if major < 7:
+        formats.append(("rar4", ["-ma4"] if major >= 5 else []))
+    if major >= 5:
+        formats.append(("rar5", ["-ma5"]))
+    for format_name, format_switches in formats:
+        cases = [
+            ("names", "m3", ["-m3"], False, False),
+            ("names", "m3-hp", ["-m3", "-hp" + PASSWORD], True, False),
+            ("links", "m3-ol", ["-m3", "-ol"], False, False),
+            ("software", "m3-k-z", ["-m3", "-k", "-z{comment}"], False, False),
+            ("release", "m3-vol-rv", ["-m3", "-v" + VOLUME_SIZE, "-rv2"], False, True),
+        ]
+        if format_name == "rar4":
+            cases += [
+                ("software", "m5-mct", ["-m5", "-mct+"], False, False),
+                ("software", "m5s-mct", ["-m5", "-s", "-mct+"], False, False),
+                ("media", "m5-mcc-mca", ["-m5", "-mcc+", "-mca+"], False, False),
+            ]
+        else:
+            cases += [
+                ("software", "m3s-htb", ["-m3", "-s", "-htb"], False, False),
+                ("software", "m3-qo", ["-m3", "-qo+"], False, False),
+                ("dupes", "m3-oi", ["-m3", "-oi1"], False, False),
+                ("software", "m5s-md1g", ["-m5", "-s", "-md1g"], False, False),
+            ]
+        for payload, label, switches, encrypted, volumes in cases:
+            yield {
+                "name": "-".join((format_name, payload, label)),
+                "payload": payload,
+                "encrypted": encrypted,
+                "volumes": volumes,
+                "switches": format_switches + switches,
+            }
 
 
 def combinations(version):
@@ -168,7 +258,20 @@ def write_payload(directory, files):
     for relative, data in files.items():
         path = directory / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        if isinstance(data, Link):
+            os.symlink(str(data), path)
+        else:
+            path.write_bytes(data)
+
+
+def payload_hashes(files):
+    """What extraction should give: a link reads as the file it points to."""
+    hashes = {}
+    for relative, data in files.items():
+        if isinstance(data, Link):
+            data = files[(Path(relative).parent / data).as_posix()]
+        hashes[relative] = hashlib.sha256(data).hexdigest()
+    return hashes
 
 
 def archive_volumes(directory, stem):
@@ -191,8 +294,10 @@ def pack(packer, command, case, payload_dir, out_dir):
     target = out_dir / stem
     target.mkdir()
     source = payload_dir / case["payload"]
+    switches = [switch.replace("{comment}", str(payload_dir.parent / "comment.txt"))
+                for switch in case["switches"]]
     result = subprocess.run(
-        command + ["a", "-r", "-idq", "-y"] + case["switches"]
+        command + ["a", "-r", "-idq", "-y"] + switches
         # Relative, as Windows packers read a leading "/" as a switch.
         + [os.path.relpath(target / (stem + ".rar"), source), "*"],
         cwd=source, stdin=subprocess.DEVNULL,
@@ -215,14 +320,18 @@ def generate(args):
         version = packer_version(command)
         packers[name] = {"command": command, "version": "%d.%02d" % version}
         jobs += [(name, command, case) for case in combinations(version)]
+        if args.extended:
+            jobs += [(name, command, case) for case in extended_combinations(version)]
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=False)
     payload_dir = out_dir / "payload"
     payloads = {}
-    for name, build in PAYLOADS.items():
+    builders = dict(PAYLOADS, **(EXTENDED_PAYLOADS if args.extended else {}))
+    for name, build in builders.items():
         files = build()
         write_payload(payload_dir / name, files)
-        payloads[name] = {path: hashlib.sha256(data).hexdigest() for path, data in files.items()}
+        payloads[name] = payload_hashes(files)
+    (out_dir / "comment.txt").write_text("An archive comment, as -z stores it.\r\n")
     archives_dir = out_dir / "archives"
     archives_dir.mkdir()
     archives = []
@@ -378,6 +487,8 @@ def main():
     gen.add_argument("--packer", action="append", required=True, metavar="NAME=COMMAND",
                      help="a native RAR packer, e.g. rar-7.23=/opt/rar/rar (repeatable)")
     gen.add_argument("--jobs", type=int, default=os.cpu_count())
+    gen.add_argument("--extended", action="store_true",
+                     help="also pack the extended cases (see extended_combinations)")
     cmp = commands.add_parser("compare", help="extract the corpus with unrar and rars")
     cmp.add_argument("corpus")
     cmp.add_argument("--unrar", required=True, help="unrar command, the reference")
