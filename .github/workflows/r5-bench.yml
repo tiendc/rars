@@ -63,6 +63,12 @@ jobs:
           ref: master
           path: old
           persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: tiendc/rars
+          ref: rar5-inline-only
+          path: inline
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v6
         with:
@@ -71,8 +77,9 @@ jobs:
         run: |
           (cd old && cargo build --release -p rars-cli --locked)
           (cd new && cargo build --release -p rars-cli --locked)
+          (cd inline && cargo build --release -p rars-cli --locked)
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
-          mkdir -p bin && cp old/target/release/rars$ext bin/rars-master$ext && cp new/target/release/rars$ext bin/rars-new$ext
+          mkdir -p bin && cp old/target/release/rars$ext bin/rars-master$ext && cp new/target/release/rars$ext bin/rars-new$ext && cp inline/target/release/rars$ext bin/rars-inline$ext
           echo "EXT=$ext" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
@@ -89,4 +96,4 @@ jobs:
         run: |
           IFS=';' read -r -a ref <<< "${REF:-}"
           BENCH_UNPACKED=$(cat work/archives/unpacked.txt) python new/scripts/decode-bench.py time work/archives \
-            "master=rars:bin/rars-master$EXT" "this branch=rars:bin/rars-new$EXT" "${ref[@]}"
+            "master=rars:bin/rars-master$EXT" "inline only=rars:bin/rars-inline$EXT" "this branch=rars:bin/rars-new$EXT" "${ref[@]}"
