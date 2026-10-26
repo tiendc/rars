@@ -50,7 +50,9 @@ jobs:
             echo "=== $a"
             for i in 1 2; do /usr/bin/time -f "%e s %M KB" rars/target/release/rars --progress never --threads 1 test work/$a.rar >/dev/null; done
             "$PERF" record -q -F 2999 -g -o /tmp/$a.data rars/target/release/rars --progress never --threads 1 test work/$a.rar >/dev/null 2>&1
-            "$PERF" report -i /tmp/$a.data --no-children --sort symbol --stdio 2>/dev/null | grep -E '^ +[0-9]' | head -30
-            echo "--- with callers of the top memory functions"
-            "$PERF" report -i /tmp/$a.data --no-children --sort symbol --stdio -G 2>/dev/null | grep -E 'memmove|memcpy|memset|page_fault|clear_page|rep_movs' -A12 | head -80
+            "$PERF" report -i /tmp/$a.data --no-children --sort symbol --stdio -g none 2>/dev/null | grep -E '^ +[0-9]' | head -16
           done
+          echo "=== annotate, solid"
+          sym=$("$PERF" report -i /tmp/solid.data --no-children --sort symbol --stdio 2>/dev/null | grep -oE '<rars::codec::rar50::HuffmanState<[^ ]*>>::decode' | head -1)
+          echo "symbol: $sym"
+          "$PERF" annotate -i /tmp/solid.data --stdio --symbol="$sym" 2>/dev/null | grep -vE '^\s*$' | awk '$1+0 >= 0.4' | head -90
