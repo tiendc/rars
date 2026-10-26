@@ -1,0 +1,46 @@
+# Fork only: pack the reference corpus (with the extended cases) using RAR for
+# Linux 7.23 and 6.24, then compare rars with UnRAR 7.23 on it.
+name: Reference corpus
+
+on:
+  push:
+    branches: [corpus-r5x]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build rars
+        run: cargo build --release --locked -p rars-cli
+      - name: RAR for Linux 7.23 and 6.24 (trial versions from rarlab.com)
+        run: |
+          for v in 723 624; do
+            curl -fsSL -o /tmp/rar-$v.tar.gz https://www.rarlab.com/rar/rarlinux-x64-$v.tar.gz
+            mkdir -p /opt/rar-$v && tar -xzf /tmp/rar-$v.tar.gz -C /opt/rar-$v --strip-components=1
+            /opt/rar-$v/rar | sed -n 2p
+          done
+      - name: Generate
+        run: |
+          python3 scripts/reference-corpus.py generate target/rar-corpus --extended \
+            --packer rar-7.23=/opt/rar-723/rar --packer rar-6.24=/opt/rar-624/rar
+      - name: Compare
+        run: |
+          python3 scripts/reference-corpus.py compare target/rar-corpus \
+            --unrar /opt/rar-723/unrar --rars target/release/rars \
+            --results target/rar-corpus-results.json --show 80 | tee target/compare.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reference-corpus-results
+          path: |
+            target/rar-corpus-results.json
+            target/compare.txt
+            target/rar-corpus/manifest.json
