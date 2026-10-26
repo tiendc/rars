@@ -2104,6 +2104,7 @@ impl<B: Budget> HuffmanState<B> {
     /// are consumed, and the results are those of reading bit by bit: a code
     /// that runs past the end of the input needs more input, and a code is
     /// invalid only when 15 real bits start none.
+    #[inline(always)]
     fn decode(&self, bits: &mut BitReader<'_>) -> Result<usize> {
         let (peek, available) = bits.peek15();
         let (symbol, len) = self.state.decode_peeked_checked(
