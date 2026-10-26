@@ -29,6 +29,8 @@ pub const DISTANCE_TABLE_SIZE_70: usize = 80;
 pub const ALIGN_TABLE_SIZE: usize = 16;
 pub const LENGTH_TABLE_SIZE: usize = 44;
 const DEFAULT_DICTIONARY_SIZE: usize = 4 * 1024 * 1024;
+// Matches up to this long are copied byte by byte (see `copy_match`).
+const SHORT_MATCH: usize = 64;
 const MAX_INITIAL_OUTPUT_CAPACITY: usize = 1024 * 1024;
 const STREAM_FLUSH_THRESHOLD: usize = 64 * 1024;
 /// The longest filter the streaming decoder holds back to apply in place:
@@ -1207,6 +1209,17 @@ impl<B: Budget> ReaderState<B> {
                     let b = output[output.len() - 1];
                     output.resize(output.len() + remaining, b)?;
                     remaining = 0;
+                } else if remaining <= SHORT_MATCH {
+                    // Most matches are a few bytes: room once, then a plain
+                    // loop, which also repeats an overlapping run correctly.
+                    // A memmove call per match costs more than such a copy.
+                    let start = output.len() - distance;
+                    let at = output.len();
+                    output.resize(at + remaining, 0)?;
+                    for i in 0..remaining {
+                        output[at + i] = output[start + i];
+                    }
+                    return Ok(());
                 } else {
                     let start = output.len() - distance;
                     if remaining <= distance {
@@ -1226,9 +1239,16 @@ impl<B: Budget> ReaderState<B> {
                 let history_distance = distance - output.len();
                 let index = self.history.len() - history_distance;
                 let take = remaining.min(history_distance);
-                output
-                    .extend_from_slice(&self.history[index..index + take])
-                    .map_err(Into::into)?;
+                let source = &self.history[index..index + take];
+                if take <= SHORT_MATCH {
+                    let at = output.len();
+                    output.resize(at + take, 0)?;
+                    for (slot, &byte) in output[at..].iter_mut().zip(source) {
+                        *slot = byte;
+                    }
+                } else {
+                    output.extend_from_slice(source).map_err(Into::into)?;
+                }
                 remaining -= take;
             }
         }
